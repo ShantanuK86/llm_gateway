@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from app.models.schemas import ChatCompletionRequest, ChatCompletionResponse
 from app.services.openai_client import call_openai, stream_openai
@@ -6,6 +6,7 @@ from app.services.gemini_client import call_gemini
 from app.models.domain import User
 from app.api.dependencies import get_current_user
 from app.services.rate_limiter import check_rate_limit
+from app.services.cost_tracker import track_cost_background_task
 import logging
 import asyncio
 
@@ -53,6 +54,7 @@ async def execute_with_retry(request: ChatCompletionRequest):
 @router.post("/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user)
 ):
     logger.info(f"Processing request for user: {user.username}")
@@ -72,4 +74,16 @@ async def chat_completions(
         )
     else:
         # Standard synchronous-like waiting (with retries)
-        return await execute_with_retry(request)
+        response = await execute_with_retry(request)
+        
+        # Track cost in the background
+        if response.usage:
+            background_tasks.add_task(
+                track_cost_background_task,
+                user_id=user.id,
+                model=response.model,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens
+            )
+            
+        return response

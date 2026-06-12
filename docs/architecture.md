@@ -163,5 +163,31 @@ In `app/services/rate_limiter.py`, we implemented the Fixed Window algorithm. He
 
 ---
 
-### What's Next?
-In the final step of Phase 4, we will implement **Cost Tracking**. Using FastAPI `BackgroundTasks`, we will take the `total_tokens` returned by the LLMs, calculate the financial cost, and update the PostgreSQL database without slowing down the user's response time.
+## 7. Phase 4c: Background Tasks & Cost Tracking
+
+Our gateway rate-limits users, but it also needs to track exactly how many tokens they consume so we can bill them.
+When a successful response is returned from OpenAI, it includes a `usage` dictionary (`prompt_tokens` and `completion_tokens`).
+
+### The Database Bottleneck
+If we pause our API route, calculate the cost, open a PostgreSQL transaction, and update the user's `total_cost`, we are adding perhaps 50–100ms of latency to the user's request. Over millions of requests, this database overhead degrades the API's performance.
+
+### FastAPI Background Tasks
+We solved this using FastAPI's built-in `BackgroundTasks`. 
+In `app/api/routes.py`:
+```python
+background_tasks.add_task(
+    track_cost_background_task,
+    user_id=user.id,
+    model=response.model,
+    prompt_tokens=response.usage.prompt_tokens,
+    completion_tokens=response.usage.completion_tokens
+)
+return response
+```
+FastAPI immediately returns the `response` to the user. The HTTP connection closes, and the user gets their data instantly. *Then*, FastAPI takes the `track_cost_background_task` function and runs it in the background on the server.
+
+Inside `app/services/cost_tracker.py`, we multiply the tokens by our pricing table, open a *new* async database session, and perform an atomic `UPDATE` on the `users` table. This allows us to track every fraction of a cent without slowing down the core API layer!
+
+---
+
+
