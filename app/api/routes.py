@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from app.models.schemas import ChatCompletionRequest, ChatCompletionResponse
 from app.services.openai_client import call_openai, stream_openai
 from app.services.gemini_client import call_gemini
+from app.models.domain import User
+from app.api.dependencies import get_current_user
 import logging
 import asyncio
 
@@ -48,7 +50,14 @@ async def execute_with_retry(request: ChatCompletionRequest):
             raise e
 
 @router.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(
+    request: ChatCompletionRequest,
+    user: User = Depends(get_current_user)
+):
+    # We now have the authenticated 'user' object available!
+    # We can use user.id later to deduct costs and enforce rate limits.
+    logger.info(f"Processing request for user: {user.username}")
+    
     if request.stream:
         # If the user requested streaming, we return a StreamingResponse
         # Note: We are only streaming OpenAI right now to keep the lesson focused.
