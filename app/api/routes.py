@@ -5,6 +5,7 @@ from app.services.openai_client import call_openai, stream_openai
 from app.services.gemini_client import call_gemini
 from app.models.domain import User
 from app.api.dependencies import get_current_user
+from app.services.rate_limiter import check_rate_limit
 import logging
 import asyncio
 
@@ -54,9 +55,10 @@ async def chat_completions(
     request: ChatCompletionRequest,
     user: User = Depends(get_current_user)
 ):
-    # We now have the authenticated 'user' object available!
-    # We can use user.id later to deduct costs and enforce rate limits.
     logger.info(f"Processing request for user: {user.username}")
+    
+    # Enforce Rate Limiting (e.g., 5 requests per 60 seconds)
+    await check_rate_limit(user.id, max_requests=5, window_seconds=60)
     
     if request.stream:
         # If the user requested streaming, we return a StreamingResponse
