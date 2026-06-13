@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 PRICING = {
     "gpt-4o": {"prompt": 5.0 / 1000000, "completion": 15.0 / 1000000},
     "gpt-3.5-turbo": {"prompt": 0.5 / 1000000, "completion": 1.5 / 1000000},
-    "gemini-1.5-flash": {"prompt": 0.35 / 1000000, "completion": 1.05 / 1000000},
+    "gemini-2.5-flash": {"prompt": 0.35 / 1000000, "completion": 1.05 / 1000000},
 }
 
 async def track_cost_background_task(user_id: int, model: str, prompt_tokens: int, completion_tokens: int):

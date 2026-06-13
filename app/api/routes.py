@@ -41,10 +41,10 @@ async def execute_with_retry(request: ChatCompletionRequest):
                     # FALLBACK LOGIC
                     # If OpenAI completely fails after retries, fallback to Gemini
                     if not is_gemini_model:
-                        logger.warning("Initiating fallback to Gemini-1.5-flash...")
+                        logger.warning("Initiating fallback to Gemini-2.5-flash...")
                         try:
                             # Try the fallback model
-                            return await call_gemini(request, target_model="gemini-1.5-flash")
+                            return await call_gemini(request, target_model="gemini-2.5-flash-lite")
                         except Exception as fallback_e:
                             logger.error(f"Fallback to Gemini also failed: {fallback_e}")
                             raise e # Raise original error if fallback fails

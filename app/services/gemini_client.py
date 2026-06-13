@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-async def call_gemini(request: ChatCompletionRequest, target_model: str = "gemini-1.5-flash") -> ChatCompletionResponse:
+async def call_gemini(request: ChatCompletionRequest, target_model: str = "gemini-2.5-flash-lite") -> ChatCompletionResponse:
     if not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured")
 
