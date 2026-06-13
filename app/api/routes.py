@@ -7,6 +7,7 @@ from app.models.domain import User
 from app.api.dependencies import get_current_user
 from app.services.rate_limiter import check_rate_limit
 from app.services.cost_tracker import track_cost_background_task
+from app.services.cache import get_cached_response, set_cached_response
 import logging
 import asyncio
 
@@ -73,8 +74,18 @@ async def chat_completions(
             media_type="text/event-stream"
         )
     else:
-        # Standard synchronous-like waiting (with retries)
+        # 1. Check Redis Cache First
+        cached_response = await get_cached_response(request)
+        if cached_response:
+            logger.info("Cache hit! Returning instant response.")
+            return cached_response
+            
+        # 2. Cache Miss - Standard synchronous-like waiting (with retries)
+        logger.info("Cache miss. Fetching from LLM provider...")
         response = await execute_with_retry(request)
+        
+        # 3. Save to Cache for future users
+        await set_cached_response(request, response)
         
         # Track cost in the background
         if response.usage:

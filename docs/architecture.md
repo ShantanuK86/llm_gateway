@@ -190,4 +190,24 @@ Inside `app/services/cost_tracker.py`, we multiply the tokens by our pricing tab
 
 ---
 
+## 8. Phase 5: Redis Exact-Match Caching
+
+If 100 users ask the Gateway *"What is the capital of France?"*, we would normally send 100 identical requests to OpenAI. We would pay for 100 requests, and the users would wait 100 times.
+
+We solved this using **Exact-Match Caching**.
+
+### Cryptographic Hashing
+In `app/services/cache.py`, when a request arrives, we extract the `model` and the `messages`. We convert them into a deterministic JSON string and run it through a `SHA-256` hashing algorithm. 
+```python
+request_hash = hashlib.sha256(json_str.encode("utf-8")).hexdigest()
+cache_key = f"llm_cache:{request_hash}"
+```
+This generates a unique fingerprint for that specific question. If someone asks the exact same question, the fingerprint will be identical.
+
+### The Cache Flow
+In `app/api/routes.py`, we updated our route logic:
+1. **Cache Hit:** We check Redis for the fingerprint. If it exists, we skip OpenAI entirely! We instantly return the saved JSON. Latency drops from 5,000ms to 5ms. The cost drops to $0.00.
+2. **Cache Miss:** If Redis doesn't have it, we route the request to OpenAI.
+3. **Saving for Later:** Once OpenAI replies, we save the response to Redis using `setex` (Set with Expiration). We give it a TTL of 24 hours (`86400` seconds). Anyone who asks the same question in the next 24 hours gets the instant, free answer.---
+
 
