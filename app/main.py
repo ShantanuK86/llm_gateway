@@ -4,6 +4,11 @@ from app.api.routes import router
 from app.db.database import engine, Base, AsyncSessionLocal
 from app.models.domain import User, ApiKey
 from sqlalchemy.future import select
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +39,22 @@ async def lifespan(app: FastAPI):
     yield
     # This runs when the app shuts down
 
+# Initialize OpenTelemetry Tracing
+# This provider manages the creation of traces
+provider = TracerProvider()
+# We use ConsoleSpanExporter to print the traces directly to the terminal for learning!
+# In production, you would export this to Jaeger, Datadog, or New Relic.
+processor = BatchSpanProcessor(ConsoleSpanExporter())
+provider.add_span_processor(processor)
+trace.set_tracer_provider(provider)
+
 app = FastAPI(title="LLM Gateway", lifespan=lifespan)
+
+# 1. Instrument FastAPI to automatically trace incoming requests
+FastAPIInstrumentor.instrument_app(app)
+
+# 2. Instrument HTTPX to automatically trace outgoing requests (to OpenAI/Gemini)
+HTTPXClientInstrumentor().instrument()
 
 app.include_router(router)
 

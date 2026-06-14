@@ -7,12 +7,65 @@ As we progress through the phases of building this gateway, this document is upd
 ---
 
 ## 📖 Table of Contents
-1. [The Problem: What is an LLM Gateway?](#1-the-problem-what-is-an-llm-gateway)
-2. [Phase 1: Concurrency & Async Architecture](#2-phase-1-concurrency--async-architecture)
-3. [Phase 2: Translation & Resiliency (Retries & Fallbacks)](#3-phase-2-translation--resiliency-retries--fallbacks)
-4. [Phase 3: Real-Time Streaming (SSE & Generators)](#4-phase-3-real-time-streaming-sse--generators)
-5. [Phase 4a: Database, Models, and Dependency Injection](#5-phase-4a-database-models-and-dependency-injection)
-6. [Phase 4b: Distributed Rate Limiting (Redis Fixed Window)](#6-phase-4b-distributed-rate-limiting-redis-fixed-window)
+1. [System Flow Diagram](#%F0%9F%97%BA%EF%B8%8F-system-flow-diagram)
+2. [The Problem: What is an LLM Gateway?](#1-the-problem-what-is-an-llm-gateway)
+3. [Phase 1: Concurrency & Async Architecture](#2-phase-1-concurrency--async-architecture)
+4. [Phase 2: Translation & Resiliency (Retries & Fallbacks)](#3-phase-2-translation--resiliency-retries--fallbacks)
+5. [Phase 3: Real-Time Streaming (SSE & Generators)](#4-phase-3-real-time-streaming-sse--generators)
+6. [Phase 4a: Database, Models, and Dependency Injection](#5-phase-4a-database-models-and-dependency-injection)
+7. [Phase 4b: Distributed Rate Limiting (Redis Fixed Window)](#6-phase-4b-distributed-rate-limiting-redis-fixed-window)
+
+---
+
+## 🗺️ System Flow Diagram
+
+Here is the complete visual blueprint of how a request flows through the gateway, from the initial API call to the final background cost tracking:
+
+```mermaid
+graph TD
+    Client["Client Application"] -->|"POST /v1/chat/completions"| API["FastAPI Gateway"]
+    
+    subgraph "Observability (OpenTelemetry)"
+        API -.->|"Auto-Traces"| OTEL["Console / Jaeger"]
+    end
+
+    subgraph "Layer 1: Auth & Rate Limiting"
+        API --> Auth{"Valid API Key?"}
+        Auth -- "No" --> 401["401 Unauthorized"]
+        Auth -- "Yes (Checks Postgres)" --> RateLimit{"Rate Limit Exceeded?"}
+        RateLimit -- "Yes" --> 429["429 Too Many Requests"]
+        RateLimit -- "No (Atomic INCR in Redis)" --> CacheCheck
+    end
+    
+    subgraph "Layer 2: Caching (Exact Match)"
+        CacheCheck{"Redis Cache Hit?"}
+        CacheCheck -- "Yes (SHA-256 Match)" --> CacheReturn["Return Cached JSON (Latency: ~5ms)"]
+        CacheReturn --> ReturnUser
+    end
+    
+    subgraph "Layer 3: Routing & Resiliency"
+        CacheCheck -- "No (Cache Miss)" --> Router{"Route by Model Prefix"}
+        
+        Router -- "gpt-*" --> OpenAI["Call OpenAI API"]
+        Router -- "gemini-*" --> Gemini["Call Gemini API"]
+        
+        OpenAI --> Retry{"Error 429/5xx?"}
+        Retry -- "Yes" --> ExpBackoff["Exponential Backoff (1s, 2s, 4s)"]
+        ExpBackoff --> OpenAI
+        
+        Retry -- "Max Retries Reached" --> Fallback["Fallback to Gemini"]
+        Fallback --> Gemini
+        
+        Retry -- "Success (200 OK)" --> SaveCache["Save to Redis (TTL: 24h)"]
+        Gemini --> SaveCache
+    end
+    
+    subgraph "Layer 4: Background Tasks"
+        SaveCache --> ReturnUser["Return Response to Client"]
+        ReturnUser -.->|"Async Trigger"| CostTask["FastAPI BackgroundTask"]
+        CostTask --> DB_Cost[("PostgreSQL: Update User Cost")]
+    end
+```
 
 ---
 
@@ -208,6 +261,23 @@ This generates a unique fingerprint for that specific question. If someone asks 
 In `app/api/routes.py`, we updated our route logic:
 1. **Cache Hit:** We check Redis for the fingerprint. If it exists, we skip OpenAI entirely! We instantly return the saved JSON. Latency drops from 5,000ms to 5ms. The cost drops to $0.00.
 2. **Cache Miss:** If Redis doesn't have it, we route the request to OpenAI.
-3. **Saving for Later:** Once OpenAI replies, we save the response to Redis using `setex` (Set with Expiration). We give it a TTL of 24 hours (`86400` seconds). Anyone who asks the same question in the next 24 hours gets the instant, free answer.---
+3. **Saving for Later:** Once OpenAI replies, we save the response to Redis using `setex` (Set with Expiration). We give it a TTL of 24 hours (`86400` seconds). Anyone who asks the same question in the next 24 hours gets the instant, free answer.
 
+## 9. Phase 6: Observability (OpenTelemetry)
 
+When you are routing thousands of requests per second through an LLM Gateway, logging is not enough. If a request takes 15 seconds, you need to know *exactly* where that time was spent. Was it the rate limiter? Was it OpenAI? Was it the database?
+
+### Distributed Tracing
+We implemented **OpenTelemetry (OTEL)**, the industry standard for observability.
+We used two automated instrumentors:
+1. `FastAPIInstrumentor`: Automatically tracks exactly when a user's request hits our gateway and when we send the response back.
+2. `HTTPXClientInstrumentor`: Automatically tracks the exact duration of our outbound API calls to OpenAI and Gemini.
+
+### The Trace Tree
+These spans are connected into a single "Trace". In a production environment, these traces are exported to systems like Datadog, New Relic, or Jaeger. You get a visual Gantt chart showing:
+* `/v1/chat/completions` (Total: 4.2s)
+  * `Redis INCR` (0.01s)
+  * `POST api.openai.com` (4.1s)
+  * `PostgreSQL UPDATE` (0.05s)
+
+For this educational project, we configured the `ConsoleSpanExporter`, which prints the raw trace data directly to the Docker terminal logs so you can see exactly how the tracing engine works!
