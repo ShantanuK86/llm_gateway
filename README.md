@@ -1,4 +1,4 @@
-# 🚀 Production-Grade LLM Gateway
+# LLM Gateway
 
 A high-performance, async, OpenAI-compatible API Gateway designed to securely route, scale, and manage traffic to Large Language Models (like OpenAI and Google Gemini).
 
