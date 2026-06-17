@@ -98,4 +98,28 @@ async def call_gemini(request: ChatCompletionRequest, target_model: str = "gemin
 
         except Exception as e:
             logger.error(f"Error parsing Gemini response: {e}")
-            raise HTTPException(status_code=500, detail="Error parsing Gemini response")
+            raise HTTPException(status_code=500, detail="Streaming not implemented for Gemini in this masterclass.")
+
+async def get_embedding(text: str) -> list[float]:
+    """
+    Takes an English string and returns an array of 768 floating point numbers
+    that mathematically represent the meaning of the text.
+    """
+    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={settings.GEMINI_API_KEY}"
+    
+    payload = {
+        "model": "models/text-embedding-004",
+        "content": {
+            "parts": [{"text": text}]
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(gemini_url, json=payload, timeout=10.0)
+        
+        if response.status_code != 200:
+            logger.error(f"Gemini Embedding failed: {response.status_code} {response.text}")
+            raise HTTPException(status_code=500, detail="Failed to generate embedding")
+            
+        data = response.json()
+        return data["embedding"]["values"]

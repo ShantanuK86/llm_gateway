@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.api.routes import router
 from app.db.database import engine, Base, AsyncSessionLocal
-from app.models.domain import User, ApiKey
+from app.models.domain import User, ApiKey, SemanticCache
 from sqlalchemy.future import select
+from sqlalchemy import text
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
@@ -16,9 +17,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # This runs when the FastAPI app starts
-    # We tell SQLAlchemy to create the tables in PostgreSQL if they don't exist
+    # This runs when the app starts up
+    logging.info("Initializing Database...")
     async with engine.begin() as conn:
+        # Create the vector extension BEFORE creating tables
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         
     # Seed a test user and API key so we can test the gateway
