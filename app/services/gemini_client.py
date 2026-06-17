@@ -102,13 +102,13 @@ async def call_gemini(request: ChatCompletionRequest, target_model: str = "gemin
 
 async def get_embedding(text: str) -> list[float]:
     """
-    Takes an English string and returns an array of 768 floating point numbers
+    Takes an English string and returns an array of 3072 floating point numbers
     that mathematically represent the meaning of the text.
     """
-    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={settings.GEMINI_API_KEY}"
+    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key={settings.GEMINI_API_KEY}"
     
     payload = {
-        "model": "models/text-embedding-004",
+        "model": "models/gemini-embedding-2",
         "content": {
             "parts": [{"text": text}]
         }

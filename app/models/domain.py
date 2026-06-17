@@ -27,7 +27,7 @@ class SemanticCache(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     prompt_text = Column(String, index=True)
-    # Gemini embeddings are 768 dimensions
-    embedding = Column(Vector(768))
+    # Gemini embeddings are 3072 dimensions
+    embedding = Column(Vector(3072))
     response_json = Column(String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -2,12 +2,15 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from app.models.schemas import ChatCompletionRequest, ChatCompletionResponse
 from app.services.openai_client import call_openai, stream_openai
-from app.services.gemini_client import call_gemini
-from app.models.domain import User
+from app.services.gemini_client import call_gemini, get_embedding
+from app.models.domain import User, SemanticCache
 from app.api.dependencies import get_current_user
 from app.services.rate_limiter import check_rate_limit
 from app.services.cost_tracker import track_cost_background_task
-from app.services.cache import get_cached_response, set_cached_response
+from app.db.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+import json
 import logging
 import asyncio
 
@@ -56,7 +59,8 @@ async def execute_with_retry(request: ChatCompletionRequest):
 async def chat_completions(
     request: ChatCompletionRequest,
     background_tasks: BackgroundTasks,
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     logger.info(f"Processing request for user: {user.username}")
     
@@ -74,18 +78,43 @@ async def chat_completions(
             media_type="text/event-stream"
         )
     else:
-        # 1. Check Redis Cache First
-        cached_response = await get_cached_response(request)
-        if cached_response:
-            logger.info("Cache hit! Returning instant response.")
-            return cached_response
+        # Extract the text the user is asking
+        prompt_text = request.messages[-1].content if request.messages else ""
+        embedding = None
+        
+        if prompt_text:
+            # 1. Generate Vector for the incoming prompt
+            logger.info("Generating embedding for semantic search...")
+            embedding = await get_embedding(prompt_text)
             
-        # 2. Cache Miss - Standard synchronous-like waiting (with retries)
+            # 2. Search Postgres for a Semantic Match (Cosine distance < 0.1 means > 90% similar)
+            query = select(SemanticCache).filter(
+                SemanticCache.embedding.cosine_distance(embedding) < 0.1
+            ).order_by(
+                SemanticCache.embedding.cosine_distance(embedding)
+            ).limit(1)
+            
+            result = await db.execute(query)
+            cached_entry = result.scalars().first()
+            
+            if cached_entry:
+                logger.info(f"Semantic Cache Hit! Matched previous prompt: '{cached_entry.prompt_text}'")
+                response_data = json.loads(cached_entry.response_json)
+                return ChatCompletionResponse(**response_data)
+                
+        # 3. Cache Miss - Fetch from LLM
         logger.info("Cache miss. Fetching from LLM provider...")
         response = await execute_with_retry(request)
         
-        # 3. Save to Cache for future users
-        await set_cached_response(request, response)
+        # 4. Save New Vector to Semantic Cache
+        if prompt_text and embedding:
+            new_cache = SemanticCache(
+                prompt_text=prompt_text,
+                embedding=embedding,
+                response_json=response.model_dump_json()
+            )
+            db.add(new_cache)
+            await db.commit()
         
         # Track cost in the background
         if response.usage:
