@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Response
 from fastapi.responses import StreamingResponse
 from app.models.schemas import ChatCompletionRequest, ChatCompletionResponse
 from app.services.openai_client import call_openai, stream_openai
@@ -9,10 +9,14 @@ from app.services.rate_limiter import check_rate_limit
 from app.services.cost_tracker import track_cost_background_task
 from app.db.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 import json
 import logging
 import asyncio
+import time
+import numpy as np
+from sklearn.decomposition import PCA
+from app.core.redis import redis_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,6 +63,7 @@ async def execute_with_retry(request: ChatCompletionRequest):
 async def chat_completions(
     request: ChatCompletionRequest,
     background_tasks: BackgroundTasks,
+    response_obj: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -100,11 +105,13 @@ async def chat_completions(
             if cached_entry:
                 logger.info(f"Semantic Cache Hit! Matched previous prompt: '{cached_entry.prompt_text}'")
                 response_data = json.loads(cached_entry.response_json)
+                response_obj.headers["X-Cache"] = "HIT"
                 return ChatCompletionResponse(**response_data)
                 
         # 3. Cache Miss - Fetch from LLM
         logger.info("Cache miss. Fetching from LLM provider...")
         response = await execute_with_retry(request)
+        response_obj.headers["X-Cache"] = "MISS"
         
         # 4. Save New Vector to Semantic Cache
         if prompt_text and embedding:
@@ -127,3 +134,73 @@ async def chat_completions(
             )
             
         return response
+
+@router.get("/v1/cache/explorer")
+async def get_vector_space(db: AsyncSession = Depends(get_db)):
+    """
+    Fetches all embeddings, compresses 3072 dimensions to 3 using PCA,
+    and returns the X, Y, Z coordinates for 3D visualization.
+    """
+    query = select(SemanticCache).limit(500)
+    result = await db.execute(query)
+    entries = result.scalars().all()
+    
+    if not entries:
+        return {"data": []}
+        
+    num_points = len(entries)
+    n_components = min(3, num_points)
+    
+    # Extract the embeddings into a numpy array
+    embeddings = np.array([np.array(e.embedding) for e in entries])
+    
+    # Run PCA to compress the dimensions down to X, Y, Z
+    if num_points > 1:
+        pca = PCA(n_components=n_components)
+        reduced = pca.fit_transform(embeddings)
+    else:
+        # If only 1 point exists, just center it
+        reduced = [[0.0] * n_components]
+        
+    data = []
+    for i, entry in enumerate(entries):
+        coords = reduced[i]
+        data.append({
+            "id": entry.id,
+            "prompt": entry.prompt_text,
+            "x": float(coords[0]) if len(coords) > 0 else 0.0,
+            "y": float(coords[1]) if len(coords) > 1 else 0.0,
+            "z": float(coords[2]) if len(coords) > 2 else 0.0
+        })
+        
+    return {"data": data}
+
+@router.get("/v1/gateway/stats")
+async def get_gateway_stats(db: AsyncSession = Depends(get_db)):
+    """
+    Returns high-level statistics for the Bento Box Dashboard.
+    """
+    # 1. Total Cost from all users
+    cost_query = select(func.sum(User.total_cost))
+    result = await db.execute(cost_query)
+    total_cost = result.scalar() or 0.0
+    
+    # 2. Total Cached Prompts
+    cache_query = select(func.count(SemanticCache.id))
+    result = await db.execute(cache_query)
+    total_cached = result.scalar() or 0
+    
+    # 3. Live Rate Limit for user_id = 1 (our test user)
+    window_seconds = 60
+    current_window = int(time.time()) // window_seconds
+    redis_key = f"rate_limit:user:1:window:{current_window}"
+    
+    val = await redis_client.get(redis_key)
+    current_requests = int(val) if val else 0
+    
+    return {
+        "total_cost": round(total_cost, 6),
+        "total_cached": total_cached,
+        "rate_limit_usage": current_requests,
+        "rate_limit_max": 5 # Hardcoded to match our check_rate_limit for user 1
+    }

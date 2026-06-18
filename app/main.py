@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.db.database import engine, Base, AsyncSessionLocal
 from app.models.domain import User, ApiKey, SemanticCache
@@ -53,11 +54,21 @@ trace.set_tracer_provider(provider)
 
 app = FastAPI(title="LLM Gateway", lifespan=lifespan)
 
+# Allow our React frontend to communicate with this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, restrict this to your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Cache"]
+)
+
 # 1. Instrument FastAPI to automatically trace incoming requests
-FastAPIInstrumentor.instrument_app(app)
+# FastAPIInstrumentor.instrument_app(app)
 
 # 2. Instrument HTTPX to automatically trace outgoing requests (to OpenAI/Gemini)
-HTTPXClientInstrumentor().instrument()
+# HTTPXClientInstrumentor().instrument()
 
 app.include_router(router)
 
