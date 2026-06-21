@@ -92,9 +92,9 @@ async def chat_completions(
             logger.info("Generating embedding for semantic search...")
             embedding = await get_embedding(prompt_text)
             
-            # 2. Search Postgres for a Semantic Match (Cosine distance < 0.1 means > 90% similar)
+            # 2. Search Postgres for a Semantic Match (Cosine distance < 0.02 means > 98% similar)
             query = select(SemanticCache).filter(
-                SemanticCache.embedding.cosine_distance(embedding) < 0.1
+                SemanticCache.embedding.cosine_distance(embedding) < 0.02
             ).order_by(
                 SemanticCache.embedding.cosine_distance(embedding)
             ).limit(1)
